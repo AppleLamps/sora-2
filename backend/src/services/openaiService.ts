@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import type { VideoCreateParams } from 'openai/resources/videos';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -10,6 +11,7 @@ export interface CreateVideoParams {
   model?: string;
   size?: string;
   seconds?: number | string;
+  image?: Buffer;
 }
 
 export interface RemixVideoParams {
@@ -18,14 +20,27 @@ export interface RemixVideoParams {
 }
 
 export const createVideo = async (params: CreateVideoParams) => {
-  const { prompt, model = 'sora-2', size, seconds } = params;
+  const { prompt, model = 'sora-2', size, seconds, image } = params;
 
-  const video = await openai.videos.create({
-    model,
-    prompt,
-    ...(size && { size }),
-    ...(seconds && { seconds: String(seconds) }),
-  });
+  const payload: VideoCreateParams = { prompt };
+
+  if (model) {
+    payload.model = model as VideoCreateParams['model'];
+  }
+
+  if (size) {
+    payload.size = size as VideoCreateParams['size'];
+  }
+
+  if (seconds) {
+    payload.seconds = String(seconds) as VideoCreateParams['seconds'];
+  }
+
+  if (image) {
+    (payload as any).input_reference = image;
+  }
+
+  const video = await openai.videos.create(payload);
 
   return video;
 };
@@ -45,7 +60,7 @@ export const listVideos = async (limit = 20, after?: string, order: 'asc' | 'des
 };
 
 export const deleteVideo = async (videoId: string) => {
-  await openai.videos.del(videoId);
+  await openai.videos.delete(videoId);
 };
 
 export const remixVideo = async (params: RemixVideoParams) => {

@@ -12,20 +12,36 @@ export interface Video {
     thumbnailUrl?: string;
     createdAt: string;
     updatedAt: string;
+    progress?: number;
+}
+
+interface CreateVideoPayload {
+    prompt: string;
+    model: string;
+    size?: string;
+    seconds?: number;
+    image?: File | null;
 }
 
 export const videoService = {
-    async createVideo(data: {
-        prompt: string;
-        model: string;
-        size?: string;
-        seconds?: number;
-    }): Promise<{ id: string; openaiVideoId: string; status: Video['status'] }> {
-        const response = await api.post('/api/videos/create', {
-            prompt: data.prompt,
-            model: data.model,
-            size: data.size,
-            seconds: data.seconds,
+    async createVideo(data: CreateVideoPayload): Promise<{ id: string; openaiVideoId: string; status: Video['status'] }> {
+        const formData = new FormData();
+        formData.append('prompt', data.prompt);
+        formData.append('model', data.model);
+        if (data.size) {
+            formData.append('size', data.size);
+        }
+        if (typeof data.seconds !== 'undefined' && data.seconds !== null) {
+            formData.append('seconds', String(data.seconds));
+        }
+        if (data.image) {
+            formData.append('image', data.image);
+        }
+
+        const response = await api.post('/api/videos/create', formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data',
+            },
         });
         // backend returns { message, video: { id, openaiVideoId, status, prompt } }
         return response.data.video;

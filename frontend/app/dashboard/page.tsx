@@ -42,7 +42,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 export default function DashboardPage() {
     const { user, logout } = useAuth();
     const router = useRouter();
-    // Using polling for status updates
+    const { socket } = useSocket();
     const [prompt, setPrompt] = useState('');
     const [model, setModel] = useState('sora-2');
     const [size, setSize] = useState('1280x720');
@@ -51,7 +51,7 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [videos, setVideos] = useState<Video[]>([]);
-    const [polling, setPolling] = useState(false);
+    const [, setPolling] = useState(false);
     const [showOnboarding, setShowOnboarding] = useState(true);
     const [snackbar, setSnackbar] = useState<{
         open: boolean;
@@ -93,6 +93,7 @@ export default function DashboardPage() {
                 model,
                 size,
                 seconds,
+                image: inputFile,
             });
 
             // Reset form
@@ -121,12 +122,26 @@ export default function DashboardPage() {
         }
     };
 
-    const loadVideos = async () => {
+    const loadVideos = async (pageToLoad = 1) => {
+        const normalizedPage = Math.max(1, pageToLoad);
         try {
-            const result = await videoService.getVideos(10, 1);
+            const result = await videoService.getVideos(10, normalizedPage);
+            const totalPages = Math.max(result.pagination.totalPages, 1);
+
+            if (result.pagination.total > 0 && normalizedPage > totalPages) {
+                const fallbackResult = await videoService.getVideos(10, totalPages);
+                setVideos(fallbackResult.videos);
+                setPaginationData(fallbackResult.pagination);
+                setPage(totalPages);
+                return;
+            }
+
             setVideos(result.videos);
+            setPaginationData(result.pagination);
+            setPage(result.pagination.total > 0 ? normalizedPage : 1);
         } catch (err) {
             console.error('Failed to load videos:', err);
+            setPaginationData(null);
         }
     };
 
@@ -260,45 +275,37 @@ export default function DashboardPage() {
 
     // Polling effect for videos in progress
     useEffect(() => {
-        if (!polling) return;
+        loadVideos(1);
+    }, []);
 
-        let isCancelled = false;
-        const inProgressIds = videos.filter(v => v.status === 'queued' || v.status === 'in_progress').map(v => v.id);
-        if (inProgressIds.length === 0) {
-            setPolling(false);
+    useEffect(() => {
+        if (!socket) {
             return;
         }
 
-        let attempt = 0;
-        const poll = async () => {
-            attempt += 1;
-            try {
-                const updates = await Promise.all(inProgressIds.map(id => videoService.getVideoStatus(id)));
-                if (isCancelled) return;
-                setVideos(prev => prev.map(v => updates.find(u => u.id === v.id) || v));
-                const stillInProgress = updates.some(v => v.status === 'queued' || v.status === 'in_progress');
-                if (!stillInProgress) {
-                    setPolling(false);
-                    // Reload all videos to ensure we have the latest data including URLs
-                    loadVideos();
-                    return;
+        const handleVideoUpdate = (updatedVideo: Video) => {
+            setVideos(prev => {
+                const existingIndex = prev.findIndex(v => v.id === updatedVideo.id);
+                if (existingIndex === -1) {
+                    if (page === 1) {
+                        const limit = paginationData?.limit ?? 10;
+                        const merged = [updatedVideo, ...prev];
+                        return merged.slice(0, limit);
+                    }
+                    return prev;
                 }
-            } catch {
-                // Keep polling, but don't crash UI
-            }
-            const delay = Math.min(10000 + attempt * 1000, 20000);
-            setTimeout(poll, delay);
+                const next = [...prev];
+                next[existingIndex] = { ...next[existingIndex], ...updatedVideo };
+                return next;
+            });
         };
-        const timeout = setTimeout(poll, 1000);
-        return () => {
-            isCancelled = true;
-            clearTimeout(timeout);
-        };
-    }, [polling, videos]);
 
-    useEffect(() => {
-        loadVideos();
-    }, []);
+        socket.on('video:update', handleVideoUpdate);
+
+        return () => {
+            socket.off('video:update', handleVideoUpdate);
+        };
+    }, [socket, page, paginationData]);
 
     return (
         <ProtectedRoute>
@@ -356,7 +363,11 @@ export default function DashboardPage() {
                                             type="file"
                                             hidden
                                             accept="image/*"
-                                            onChange={(e) => setInputFile(e.target.files?.[0] || null)}
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0] || null;
+                                                setInputFile(file);
+                                                e.target.value = '';
+                                            }}
                                         />
                                     </Button>
                                     {inputFile && (
@@ -419,7 +430,7 @@ export default function DashboardPage() {
                                     <Button
                                         size="small"
                                         startIcon={<Refresh />}
-                                        onClick={loadVideos}
+                                        onClick={() => loadVideos(page)}
                                         variant="outlined"
                                     >
                                         Refresh
@@ -483,6 +494,12 @@ export default function DashboardPage() {
                                         })}
                                     </Grid>
                                 )}
+                                <Pagination
+                                    count={paginationData?.totalPages || 1}
+                                    page={page}
+                                    onChange={(_event, newPage) => loadVideos(newPage)}
+                                    sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}
+                                />
                             </Paper>
                         </Grid>
                     </Grid>
@@ -604,7 +621,7 @@ function OnboardingDialog({ open, onClose }: { open: boolean; onClose: () => voi
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                     <HelpOutlineIcon color="primary" />
-                    <Typography>We’ll start generation and show progress automatically via polling.</Typography>
+                    <Typography>We’ll start generation and stream progress updates in real time.</Typography>
                 </Box>
                 <Typography variant="body2" color="text.secondary">
                     Tip: Use the sandbox by setting OPENAI_BASE_URL on the server to avoid live billing while testing.
