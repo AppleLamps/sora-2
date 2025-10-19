@@ -5,6 +5,12 @@ import prisma from '../utils/prisma';
 import * as openaiService from '../services/openaiService';
 import { addVideoToQueue } from '../services/queueService';
 
+const VIDEO_COSTS = {
+  'sora-2': 10,
+  'sora-2-pro': 20,
+  remix: 5,
+} as const;
+
 export const createVideo = async (req: AuthRequest, res: Response): Promise<any> => {
   try {
     const { prompt, model, size, seconds } = req.body;
@@ -21,6 +27,17 @@ export const createVideo = async (req: AuthRequest, res: Response): Promise<any>
       return res.status(400).json({ error: 'Prompt violates content policy', moderation });
     }
 
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const selectedModel =
+      model && Object.prototype.hasOwnProperty.call(VIDEO_COSTS, model)
+        ? (model as keyof typeof VIDEO_COSTS)
+        : 'sora-2';
+    const cost = VIDEO_COSTS[selectedModel];
+
+    if (!user || user.credits < cost) {
+      return res.status(402).json({ error: 'Insufficient credits to generate video.' });
+    }
+
     const video = await openaiService.createVideo({
       prompt,
       model,
@@ -29,17 +46,31 @@ export const createVideo = async (req: AuthRequest, res: Response): Promise<any>
       image: referenceImage,
     });
 
-    const dbVideo = await prisma.video.create({
-      data: {
-        userId,
-        prompt,
-        model: model || 'sora-2',
-        size: size || null,
-        seconds: typeof secondsValue === 'number' && !Number.isNaN(secondsValue) ? secondsValue : null,
-        status: video.status,
-        openaiVideoId: video.id,
-      },
-    });
+    const [dbVideo] = await prisma.$transaction([
+      prisma.video.create({
+        data: {
+          userId,
+          prompt,
+          model: model || 'sora-2',
+          size: size || null,
+          seconds: typeof secondsValue === 'number' && !Number.isNaN(secondsValue) ? secondsValue : null,
+          status: video.status,
+          openaiVideoId: video.id,
+        },
+      }),
+      prisma.user.update({
+        where: { id: userId },
+        data: { credits: { decrement: cost } },
+      }),
+      prisma.creditTransaction.create({
+        data: {
+          userId,
+          amount: -cost,
+          reason: 'video_generation',
+          videoId: video.id,
+        },
+      }),
+    ]);
 
     const io = req.app.locals.io as SocketIOServer | undefined;
     if (!io) {
@@ -182,22 +213,43 @@ export const remixVideo = async (req: AuthRequest, res: Response): Promise<any> 
       return res.status(400).json({ error: 'Prompt violates content policy', moderation });
     }
 
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const cost = VIDEO_COSTS.remix;
+
+    if (!user || user.credits < cost) {
+      return res.status(402).json({ error: 'Insufficient credits to generate video.' });
+    }
+
     const remixedVideo = await openaiService.remixVideo({
       videoId: originalVideo.openaiVideoId,
       prompt,
     });
 
-    const dbVideo = await prisma.video.create({
-      data: {
-        userId,
-        prompt: `Remix: ${prompt}`,
-        model: originalVideo.model,
-        size: originalVideo.size,
-        seconds: originalVideo.seconds,
-        status: remixedVideo.status,
-        openaiVideoId: remixedVideo.id,
-      },
-    });
+    const [dbVideo] = await prisma.$transaction([
+      prisma.video.create({
+        data: {
+          userId,
+          prompt: `Remix: ${prompt}`,
+          model: originalVideo.model,
+          size: originalVideo.size,
+          seconds: originalVideo.seconds,
+          status: remixedVideo.status,
+          openaiVideoId: remixedVideo.id,
+        },
+      }),
+      prisma.user.update({
+        where: { id: userId },
+        data: { credits: { decrement: cost } },
+      }),
+      prisma.creditTransaction.create({
+        data: {
+          userId,
+          amount: -cost,
+          reason: 'remix',
+          videoId: remixedVideo.id,
+        },
+      }),
+    ]);
 
     const io = req.app.locals.io as SocketIOServer | undefined;
     if (!io) {

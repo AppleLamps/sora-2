@@ -23,6 +23,7 @@ export const register = async (req: Request, res: Response): Promise<any> => {
         email,
         password: hashedPassword,
         name: name || null,
+        credits: 100,
       },
     });
 
@@ -35,6 +36,7 @@ export const register = async (req: Request, res: Response): Promise<any> => {
         id: user.id,
         email: user.email,
         name: user.name,
+        credits: user.credits,
       },
     });
   } catch (error) {
@@ -70,6 +72,7 @@ export const login = async (req: Request, res: Response): Promise<any> => {
         id: user.id,
         email: user.email,
         name: user.name,
+        credits: user.credits,
       },
     });
   } catch (error) {
@@ -89,6 +92,7 @@ export const getProfile = async (req: Request, res: Response): Promise<any> => {
         email: true,
         name: true,
         createdAt: true,
+        credits: true,
       },
     });
 
