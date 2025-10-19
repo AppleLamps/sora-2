@@ -30,7 +30,7 @@ import {
     Tooltip,
     CircularProgress,
 } from '@mui/material';
-import { PlayArrow, Logout, AccountCircle, CloudUpload, Refresh } from '@mui/icons-material';
+import { PlayArrow, Logout, AccountCircle, CloudUpload, Refresh, CreditScore } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import ProtectedRoute from '../components/ProtectedRoute';
@@ -38,6 +38,7 @@ import { videoService, Video } from '../services/videoService';
 import type { AxiosError } from 'axios';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { useSocket } from '../contexts/SocketContext';
 
 export default function DashboardPage() {
     const { user, logout } = useAuth();
@@ -110,7 +111,12 @@ export default function DashboardPage() {
             });
         } catch (err) {
             const axErr = err as AxiosError<{ error?: string }>;
-            const message = axErr.response?.data?.error || axErr.message || 'Failed to generate video';
+            let message = axErr.response?.data?.error || axErr.message || 'Failed to generate video';
+
+            if (axErr.response?.status === 402) {
+                message = 'Generation failed: Insufficient credits.';
+            }
+
             setError(message);
             setSnackbar({
                 open: true,
@@ -179,7 +185,12 @@ export default function DashboardPage() {
             loadVideos();
         } catch (err) {
             const axErr = err as AxiosError<{ error?: string }>;
-            const message = axErr.response?.data?.error || axErr.message || 'Failed to remix video';
+            let message = axErr.response?.data?.error || axErr.message || 'Failed to remix video';
+
+            if (axErr.response?.status === 402) {
+                message = 'Remix failed: Insufficient credits.';
+            }
+
             setError(message);
             setSnackbar({
                 open: true,
@@ -324,6 +335,12 @@ export default function DashboardPage() {
                         <Button color="inherit" startIcon={<AccountCircle />}>
                             {user?.name || user?.email}
                         </Button>
+                        <Chip
+                            icon={<CreditScore />}
+                            label={`${user?.credits ?? 0} Credits`}
+                            variant="outlined"
+                            sx={{ ml: 1, color: 'white', borderColor: 'white' }}
+                        />
                         <Button color="inherit" onClick={handleLogout} startIcon={<Logout />}>
                             Logout
                         </Button>
