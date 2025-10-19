@@ -29,7 +29,6 @@ import {
     DialogActions,
     Tooltip,
     CircularProgress,
-    Pagination,
 } from '@mui/material';
 import { PlayArrow, Logout, AccountCircle, CloudUpload, Refresh } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,7 +38,6 @@ import { videoService, Video } from '../services/videoService';
 import type { AxiosError } from 'axios';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { useSocket } from '../contexts/SocketContext';
 
 export default function DashboardPage() {
     const { user, logout } = useAuth();
@@ -67,8 +65,6 @@ export default function DashboardPage() {
     const [remixPrompt, setRemixPrompt] = useState('');
     const [playerOpen, setPlayerOpen] = useState(false);
     const [playerUrl, setPlayerUrl] = useState<string | null>(null);
-    const [page, setPage] = useState(1);
-    const [paginationData, setPaginationData] = useState<{ total: number; page: number; limit: number; totalPages: number } | null>(null);
 
     const handleCloseSnackbar = (_?: SyntheticEvent | Event, reason?: string) => {
         if (reason === 'clickaway') {
@@ -105,8 +101,8 @@ export default function DashboardPage() {
             setInputFile(null);
 
             // Refresh videos list
-            await loadVideos(1);
-            setPolling(false);
+            loadVideos();
+            setPolling(true);
             setSnackbar({
                 open: true,
                 message: 'Video generation started!',
@@ -179,8 +175,8 @@ export default function DashboardPage() {
                 message: 'Remix started!',
                 severity: 'success',
             });
-            setPolling(false);
-            await loadVideos(1);
+            setPolling(true);
+            loadVideos();
         } catch (err) {
             const axErr = err as AxiosError<{ error?: string }>;
             const message = axErr.response?.data?.error || axErr.message || 'Failed to remix video';
@@ -254,7 +250,6 @@ export default function DashboardPage() {
                 message: 'Video deleted successfully.',
                 severity: 'success',
             });
-            await loadVideos(page);
         } catch (err) {
             const axErr = err as AxiosError<{ error?: string }>;
             const message = axErr.response?.data?.error || axErr.message || 'Failed to delete video';
@@ -278,6 +273,7 @@ export default function DashboardPage() {
         setPlayerUrl(null);
     };
 
+    // Polling effect for videos in progress
     useEffect(() => {
         loadVideos(1);
     }, []);
