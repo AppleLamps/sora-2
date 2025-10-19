@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, SyntheticEvent } from 'react';
 import {
     AppBar,
     Toolbar,
@@ -18,8 +18,17 @@ import {
     Card,
     CardContent,
     CardActions,
+    CardMedia,
     Chip,
+    Snackbar,
     Alert,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogContentText,
+    DialogActions,
+    Tooltip,
+    CircularProgress,
 } from '@mui/material';
 import { PlayArrow, Logout, AccountCircle, CloudUpload, Refresh } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
@@ -29,7 +38,6 @@ import { videoService, Video } from '../services/videoService';
 import type { AxiosError } from 'axios';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { Tooltip, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 
 export default function DashboardPage() {
     const { user, logout } = useAuth();
@@ -45,6 +53,25 @@ export default function DashboardPage() {
     const [videos, setVideos] = useState<Video[]>([]);
     const [polling, setPolling] = useState(false);
     const [showOnboarding, setShowOnboarding] = useState(true);
+    const [snackbar, setSnackbar] = useState<{
+        open: boolean;
+        message: string;
+        severity: 'success' | 'error' | 'info';
+    } | null>(null);
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+    const [videoToDelete, setVideoToDelete] = useState<Video | null>(null);
+    const [remixDialogOpen, setRemixDialogOpen] = useState(false);
+    const [videoToRemix, setVideoToRemix] = useState<Video | null>(null);
+    const [remixPrompt, setRemixPrompt] = useState('');
+    const [playerOpen, setPlayerOpen] = useState(false);
+    const [playerUrl, setPlayerUrl] = useState<string | null>(null);
+
+    const handleCloseSnackbar = (_?: SyntheticEvent | Event, reason?: string) => {
+        if (reason === 'clickaway') {
+            return;
+        }
+        setSnackbar(null);
+    };
 
     const handleLogout = () => {
         logout();
@@ -61,7 +88,7 @@ export default function DashboardPage() {
         setLoading(true);
 
         try {
-            const created = await videoService.createVideo({
+            await videoService.createVideo({
                 prompt,
                 model,
                 size,
@@ -75,11 +102,20 @@ export default function DashboardPage() {
             // Refresh videos list
             loadVideos();
             setPolling(true);
-            alert(`Video generation started! ID: ${created.id}`);
+            setSnackbar({
+                open: true,
+                message: 'Video generation started!',
+                severity: 'success',
+            });
         } catch (err) {
             const axErr = err as AxiosError<{ error?: string }>;
             const message = axErr.response?.data?.error || axErr.message || 'Failed to generate video';
             setError(message);
+            setSnackbar({
+                open: true,
+                message,
+                severity: 'error',
+            });
         } finally {
             setLoading(false);
         }
@@ -94,20 +130,47 @@ export default function DashboardPage() {
         }
     };
 
-    const handleRemix = async (video: Video) => {
-        const newPrompt = window.prompt(`Enter new prompt for remixing "${video.prompt}":`);
-        if (newPrompt && newPrompt.trim()) {
-            try {
-                await videoService.remixVideo(video.id, newPrompt.trim());
-                // Start polling after remix
-                setPolling(true);
-                loadVideos();
-                alert('Remix started!');
-            } catch (err) {
-                const axErr = err as AxiosError<{ error?: string }>;
-                const message = axErr.response?.data?.error || axErr.message || 'Failed to remix video';
-                setError(message);
-            }
+    const handleRemix = (video: Video) => {
+        setVideoToRemix(video);
+        setRemixPrompt(video.prompt);
+        setRemixDialogOpen(true);
+    };
+
+    const confirmRemix = async () => {
+        if (!videoToRemix) {
+            return;
+        }
+
+        if (!remixPrompt.trim()) {
+            setSnackbar({
+                open: true,
+                message: 'Remix prompt cannot be empty.',
+                severity: 'error',
+            });
+            return;
+        }
+
+        try {
+            await videoService.remixVideo(videoToRemix.id, remixPrompt.trim());
+            setRemixDialogOpen(false);
+            setVideoToRemix(null);
+            setRemixPrompt('');
+            setSnackbar({
+                open: true,
+                message: 'Remix started!',
+                severity: 'success',
+            });
+            setPolling(true);
+            loadVideos();
+        } catch (err) {
+            const axErr = err as AxiosError<{ error?: string }>;
+            const message = axErr.response?.data?.error || axErr.message || 'Failed to remix video';
+            setError(message);
+            setSnackbar({
+                open: true,
+                message,
+                severity: 'error',
+            });
         }
     };
 
@@ -128,27 +191,71 @@ export default function DashboardPage() {
 
             const blob = await response.blob();
             const blobUrl = URL.createObjectURL(blob);
-            window.open(blobUrl, '_blank');
-
-            // Clean up the blob URL after a delay
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+            setPlayerUrl((prev) => {
+                if (prev) {
+                    URL.revokeObjectURL(prev);
+                }
+                return blobUrl;
+            });
+            setPlayerOpen(true);
         } catch (error) {
             console.error('Error viewing video:', error);
-            alert('Failed to load video. Please try again.');
+            setSnackbar({
+                open: true,
+                message: 'Failed to load video. Please try again.',
+                severity: 'error',
+            });
         }
     };
 
-    const handleDelete = async (id: string) => {
-        if (confirm('Are you sure you want to delete this video?')) {
-            try {
-                await videoService.deleteVideo(id);
-                setVideos(prev => prev.filter(v => v.id !== id));
-            } catch (err) {
-                const axErr = err as AxiosError<{ error?: string }>;
-                const message = axErr.response?.data?.error || axErr.message || 'Failed to delete video';
-                setError(message);
-            }
+    const handleDelete = (id: string) => {
+        const video = videos.find(v => v.id === id);
+        if (!video) {
+            setSnackbar({
+                open: true,
+                message: 'Unable to find the selected video.',
+                severity: 'error',
+            });
+            return;
         }
+        setVideoToDelete(video);
+        setDeleteDialogOpen(true);
+    };
+
+    const confirmDelete = async () => {
+        if (!videoToDelete) {
+            return;
+        }
+
+        try {
+            await videoService.deleteVideo(videoToDelete.id);
+            setVideos(prev => prev.filter(v => v.id !== videoToDelete.id));
+            setSnackbar({
+                open: true,
+                message: 'Video deleted successfully.',
+                severity: 'success',
+            });
+        } catch (err) {
+            const axErr = err as AxiosError<{ error?: string }>;
+            const message = axErr.response?.data?.error || axErr.message || 'Failed to delete video';
+            setError(message);
+            setSnackbar({
+                open: true,
+                message,
+                severity: 'error',
+            });
+        } finally {
+            setDeleteDialogOpen(false);
+            setVideoToDelete(null);
+        }
+    };
+
+    const handleClosePlayer = () => {
+        if (playerUrl) {
+            URL.revokeObjectURL(playerUrl);
+        }
+        setPlayerOpen(false);
+        setPlayerUrl(null);
     };
 
     // Polling effect for videos in progress
@@ -220,7 +327,7 @@ export default function DashboardPage() {
                     <OnboardingDialog open={showOnboarding} onClose={() => setShowOnboarding(false)} />
                     <Grid container spacing={3}>
                         {/* Video Generation Form */}
-                        <Grid item xs={12} md={6}>
+                        <Grid item xs={12} md={12}>
                             <Paper sx={{ p: 3 }}>
                                 <Typography variant="h5" gutterBottom>
                                     Generate New Video
@@ -303,7 +410,7 @@ export default function DashboardPage() {
                         </Grid>
 
                         {/* Recent Videos */}
-                        <Grid item xs={12} md={6}>
+                        <Grid item xs={12} md={12}>
                             <Paper sx={{ p: 3 }}>
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                                     <Typography variant="h5">
@@ -323,45 +430,160 @@ export default function DashboardPage() {
                                         No videos generated yet.
                                     </Typography>
                                 ) : (
-                                    <Box sx={{ mt: 2 }}>
-                                        {videos.map((video) => (
-                                            <Card key={video.id} sx={{ mb: 2 }}>
-                                                <CardContent>
-                                                    <Typography variant="h6" gutterBottom>
-                                                        {video.prompt}
-                                                    </Typography>
-                                                    <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-                                                        <Chip label={video.model} size="small" />
-                                                        <Chip label={video.status} size="small" color={
-                                                            video.status === 'completed' ? 'success' :
-                                                                video.status === 'failed' ? 'error' :
-                                                                    video.status === 'in_progress' ? 'warning' : 'default'
-                                                        } />
-                                                    </Box>
-                                                    <Typography variant="body2" color="text.secondary">
-                                                        Created: {new Date(video.createdAt).toLocaleDateString()}
-                                                    </Typography>
-                                                </CardContent>
-                                                <CardActions>
-                                                    {video.status === 'completed' && video.videoUrl && (
-                                                        <Button size="small" onClick={() => handleViewVideo(video)}>
-                                                            View Video
-                                                        </Button>
-                                                    )}
-                                                    <Button size="small" onClick={() => handleRemix(video)}>
-                                                        Remix
-                                                    </Button>
-                                                    <Button size="small" color="error" onClick={() => handleDelete(video.id)}>
-                                                        Delete
-                                                    </Button>
-                                                </CardActions>
-                                            </Card>
-                                        ))}
-                                    </Box>
+                                    <Grid container spacing={3} sx={{ mt: 1 }}>
+                                        {videos.map((video) => {
+                                            const statusColor =
+                                                video.status === 'completed' ? 'success' :
+                                                    video.status === 'failed' ? 'error' :
+                                                        video.status === 'in_progress' ? 'warning' : 'default';
+                                            const isProcessing = video.status === 'in_progress' || video.status === 'queued';
+
+                                            return (
+                                                <Grid item xs={12} sm={6} lg={4} key={video.id}>
+                                                    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                                                        <CardMedia
+                                                            component="img"
+                                                            height="160"
+                                                            image={video.thumbnailUrl || 'https://via.placeholder.com/300x160.png?text=No+Thumbnail'}
+                                                            alt="Video thumbnail"
+                                                        />
+                                                        <CardContent sx={{ flexGrow: 1 }}>
+                                                            <Typography variant="h6" gutterBottom>
+                                                                {video.prompt}
+                                                            </Typography>
+                                                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+                                                                <Chip label={video.model} size="small" />
+                                                                <Chip
+                                                                    label={video.status}
+                                                                    size="small"
+                                                                    color={statusColor}
+                                                                    icon={isProcessing ? <CircularProgress size={16} color="inherit" /> : undefined}
+                                                                />
+                                                            </Box>
+                                                            <Typography variant="body2" color="text.secondary">
+                                                                Created: {new Date(video.createdAt).toLocaleDateString()}
+                                                            </Typography>
+                                                        </CardContent>
+                                                        <CardActions>
+                                                            {video.status === 'completed' && video.videoUrl && (
+                                                                <Button size="small" onClick={() => handleViewVideo(video)}>
+                                                                    View Video
+                                                                </Button>
+                                                            )}
+                                                            <Button size="small" onClick={() => handleRemix(video)}>
+                                                                Remix
+                                                            </Button>
+                                                            <Button size="small" color="error" onClick={() => handleDelete(video.id)}>
+                                                                Delete
+                                                            </Button>
+                                                        </CardActions>
+                                                    </Card>
+                                                </Grid>
+                                            );
+                                        })}
+                                    </Grid>
                                 )}
                             </Paper>
                         </Grid>
                     </Grid>
+                    <Snackbar
+                        open={Boolean(snackbar?.open)}
+                        autoHideDuration={6000}
+                        onClose={handleCloseSnackbar}
+                        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+                    >
+                        {snackbar ? (
+                            <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
+                                {snackbar.message}
+                            </Alert>
+                        ) : null}
+                    </Snackbar>
+                    <Dialog
+                        open={deleteDialogOpen}
+                        onClose={() => {
+                            setDeleteDialogOpen(false);
+                            setVideoToDelete(null);
+                        }}
+                    >
+                        <DialogTitle>Delete Video</DialogTitle>
+                        <DialogContent>
+                            <DialogContentText>
+                                {`Are you sure you want to delete "${videoToDelete?.prompt ?? ''}"? This action cannot be undone.`}
+                            </DialogContentText>
+                        </DialogContent>
+                        <DialogActions>
+                            <Button onClick={() => {
+                                setDeleteDialogOpen(false);
+                                setVideoToDelete(null);
+                            }}>
+                                Cancel
+                            </Button>
+                            <Button color="error" onClick={confirmDelete}>
+                                Confirm
+                            </Button>
+                        </DialogActions>
+                    </Dialog>
+                    <Dialog
+                        open={remixDialogOpen}
+                        onClose={() => {
+                            setRemixDialogOpen(false);
+                            setVideoToRemix(null);
+                            setRemixPrompt('');
+                        }}
+                        maxWidth="sm"
+                        fullWidth
+                    >
+                        <DialogTitle>Remix Video</DialogTitle>
+                        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+                            <Typography variant="subtitle2" color="text.secondary">
+                                Original Prompt
+                            </Typography>
+                            <Typography variant="body1">{videoToRemix?.prompt}</Typography>
+                            <TextField
+                                label="Remix Prompt"
+                                multiline
+                                minRows={3}
+                                value={remixPrompt}
+                                onChange={(e) => setRemixPrompt(e.target.value)}
+                                fullWidth
+                            />
+                        </DialogContent>
+                        <DialogActions>
+                            <Button
+                                onClick={() => {
+                                    setRemixDialogOpen(false);
+                                    setVideoToRemix(null);
+                                    setRemixPrompt('');
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button onClick={confirmRemix} variant="contained">
+                                Start Remix
+                            </Button>
+                        </DialogActions>
+                    </Dialog>
+                    <Dialog open={playerOpen} onClose={handleClosePlayer} maxWidth="md" fullWidth>
+                        <DialogTitle>Video Preview</DialogTitle>
+                        <DialogContent>
+                            {playerUrl ? (
+                                <Box sx={{ position: 'relative', pt: 1 }}>
+                                    <video
+                                        width="100%"
+                                        controls
+                                        autoPlay
+                                        src={playerUrl}
+                                        onEnded={handleClosePlayer}
+                                        style={{ borderRadius: 8 }}
+                                    />
+                                </Box>
+                            ) : (
+                                <Box sx={{ py: 4, display: 'flex', justifyContent: 'center' }}>
+                                    <CircularProgress />
+                                </Box>
+                            )}
+                        </DialogContent>
+                    </Dialog>
                 </Container>
             </Box>
         </ProtectedRoute>
