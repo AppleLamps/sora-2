@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes';
@@ -7,7 +7,7 @@ import { apiLimiter } from './middleware/rateLimiter';
 
 dotenv.config();
 
-export const createApp = () => {
+export const createApp = (): Application => {
     const app = express();
 
     const allowedOrigins = [
@@ -40,7 +40,7 @@ export const createApp = () => {
     app.use('/api/auth', authRoutes);
     app.use('/api/videos', videoRoutes);
 
-    app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
         console.error('Unhandled error:', err);
         res.status(500).json({ error: 'Internal server error' });
     });

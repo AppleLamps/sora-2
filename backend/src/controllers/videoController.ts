@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { Server as SocketIOServer } from 'socket.io';
 import { AuthRequest } from '../middleware/auth';
 import prisma from '../utils/prisma';
 import * as openaiService from '../services/openaiService';
@@ -8,6 +9,8 @@ export const createVideo = async (req: AuthRequest, res: Response): Promise<any>
   try {
     const { prompt, model, size, seconds } = req.body;
     const userId = req.user!.userId;
+    const referenceImage = req.file?.buffer;
+    const secondsValue = typeof seconds !== 'undefined' && seconds !== null && seconds !== '' ? Number(seconds) : undefined;
 
     if (!prompt) {
       return res.status(400).json({ error: 'Prompt is required' });
@@ -22,7 +25,8 @@ export const createVideo = async (req: AuthRequest, res: Response): Promise<any>
       prompt,
       model,
       size,
-      seconds,
+      seconds: secondsValue,
+      image: referenceImage,
     });
 
     const dbVideo = await prisma.video.create({
@@ -31,13 +35,17 @@ export const createVideo = async (req: AuthRequest, res: Response): Promise<any>
         prompt,
         model: model || 'sora-2',
         size: size || null,
-        seconds: seconds || null,
+        seconds: typeof secondsValue === 'number' && !Number.isNaN(secondsValue) ? secondsValue : null,
         status: video.status,
         openaiVideoId: video.id,
       },
     });
 
-    await addVideoToQueue(dbVideo.id);
+    const io = req.app.locals.io as SocketIOServer | undefined;
+    if (!io) {
+      throw new Error('Real-time service is unavailable');
+    }
+    await addVideoToQueue(dbVideo.id, userId, io);
 
     res.status(201).json({
       message: 'Video generation started',
@@ -191,7 +199,11 @@ export const remixVideo = async (req: AuthRequest, res: Response): Promise<any> 
       },
     });
 
-    await addVideoToQueue(dbVideo.id);
+    const io = req.app.locals.io as SocketIOServer | undefined;
+    if (!io) {
+      throw new Error('Real-time service is unavailable');
+    }
+    await addVideoToQueue(dbVideo.id, userId, io);
 
     res.status(201).json({
       message: 'Video remix started',

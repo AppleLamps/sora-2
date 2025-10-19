@@ -1,8 +1,10 @@
+import { Server as SocketIOServer } from 'socket.io';
 import prisma from '../utils/prisma';
 import * as openaiService from './openaiService';
+import { getSocketIdForUser } from './socketRegistry';
 
 // Process video in background without Redis queue
-const processVideoInBackground = async (videoId: string) => {
+const processVideoInBackground = async (videoId: string, userId: string, io: SocketIOServer) => {
   try {
     const dbVideo = await prisma.video.findUnique({
       where: { id: videoId },
@@ -17,6 +19,14 @@ const processVideoInBackground = async (videoId: string) => {
     const openaiVideo = await openaiService.pollVideoStatus(
       dbVideo.openaiVideoId,
       (status, progress) => {
+        const socketId = getSocketIdForUser(userId);
+        if (socketId) {
+          io.to(socketId).emit('video:update', {
+            id: videoId,
+            status,
+            progress,
+          });
+        }
         console.log(`Video ${videoId} - Status: ${status}, Progress: ${progress}%`);
       }
     );
@@ -27,14 +37,23 @@ const processVideoInBackground = async (videoId: string) => {
     const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
     const videoUrl = `${backendUrl}/api/videos/${videoId}/download`;
 
-    await prisma.video.update({
+    const updatedVideo = await prisma.video.update({
       where: { id: videoId },
       data: {
         status: openaiVideo.status,
         videoUrl: videoUrl,
-        thumbnailUrl: null, // We can add thumbnail support later
+        thumbnailUrl: (openaiVideo as any).thumbnail_url || null,
       },
     });
+
+    const socketId = getSocketIdForUser(userId);
+    if (socketId) {
+      io.to(socketId).emit('video:update', {
+        ...updatedVideo,
+        createdAt: updatedVideo.createdAt.toISOString(),
+        updatedAt: updatedVideo.updatedAt.toISOString(),
+      });
+    }
 
     console.log(`✓ Video processing completed for ${videoId}. URL: ${videoUrl}`);
     return { success: true, videoId };
@@ -48,13 +67,21 @@ const processVideoInBackground = async (videoId: string) => {
       },
     });
 
+    const socketId = getSocketIdForUser(userId);
+    if (socketId) {
+      io.to(socketId).emit('video:update', {
+        id: videoId,
+        status: 'failed',
+      });
+    }
+
     throw error;
   }
 };
 
-export const addVideoToQueue = async (videoId: string) => {
+export const addVideoToQueue = async (videoId: string, userId: string, io: SocketIOServer) => {
   // Process video asynchronously without waiting
-  processVideoInBackground(videoId).catch((error) => {
+  processVideoInBackground(videoId, userId, io).catch((error) => {
     console.error(`Failed to process video ${videoId}:`, error);
   });
 };
