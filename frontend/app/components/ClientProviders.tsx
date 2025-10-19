@@ -6,13 +6,20 @@ import { AuthProvider } from '../contexts/AuthContext';
 
 const theme = createTheme({
     palette: {
-        mode: 'light',
+        mode: 'dark',
         primary: {
-            main: '#1976d2',
+            main: '#9c27b0',
         },
         secondary: {
-            main: '#dc004e',
+            main: '#009688',
         },
+        background: {
+            default: '#121212',
+            paper: '#1e1e1e',
+        },
+    },
+    typography: {
+        fontFamily: `'Inter', sans-serif`,
     },
 });
 
